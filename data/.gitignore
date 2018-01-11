@@ -2,4 +2,6 @@ data_road/
 vgg/
 gtFine_trainvaltest/
 
+.floyddata
+
 vgg16.npy

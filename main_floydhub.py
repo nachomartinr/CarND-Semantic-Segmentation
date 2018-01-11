@@ -2,21 +2,19 @@ import os.path
 import tensorflow as tf
 import helper
 import warnings
-import shutil
+import time
+from datetime import timedelta
 from distutils.version import LooseVersion
 import project_tests as tests
-import time
-
+import numpy as np
 
 STDDEV_INI = 0.01 # Standard deviation for default weight initialization
-L2_REG = 1e-4     # L2 regularization scaler
-KEEP_PROB = 0.8
-LEARNING_RATE = 1e-4
+L2_REG = 0.001     # L2 regularization scaler
+KEEP_PROB = 0.6
+LEARNING_RATE = 0.0009
 
-EPOCHS = 40
-BATCH_SIZE = 10
-
-LOG_PATH = './log'
+EPOCHS = 50
+BATCH_SIZE = 16
 
 # Check TensorFlow Version
 assert LooseVersion(tf.__version__) >= LooseVersion('1.0'), 'Please use TensorFlow version 1.0 or newer.  You are using {}'.format(tf.__version__)
@@ -79,9 +77,11 @@ def layers(vgg_layer3_out, vgg_layer4_out, vgg_layer7_out, num_classes):
     """
     # TODO: Implement function
     with tf.name_scope('FCN'):
-        #https://discussions.udacity.com/t/here-is-some-advice-and-clarifications-about-the-semantic-segmentation-project/403100
-        #layer3_out_scaled = tf.multiply(vgg_layer3_out, 0.0001, name=‘layer3_out_scaled’)
-        #layer4_out_scaled = tf.multiply(vgg_layer4_out, 0.01, name=‘layer4_out_scaled’)
+    	# According to this:
+        # https://discussions.udacity.com/t/here-is-some-advice-and-clarifications-about-the-semantic-segmentation-project/403100
+        # scaling the skip layers helps reducing the loss
+        layer3_out_scaled = tf.multiply(vgg_layer3_out, 0.0001, name='layer3_out_scaled')
+        layer4_out_scaled = tf.multiply(vgg_layer4_out, 0.01, name='layer4_out_scaled')
 
         # 1x1 convolution of vgg layer 7
         fcn_layer7_1x1 = tf.layers.conv2d(vgg_layer7_out, num_classes,
@@ -96,7 +96,7 @@ def layers(vgg_layer3_out, vgg_layer4_out, vgg_layer7_out, num_classes):
                                                    name='fcn_layer7_up')
 
         # 1x1 convolution of vgg layer 4
-        fcn_layer4_1x1 = tf.layers.conv2d(vgg_layer4_out, num_classes,
+        fcn_layer4_1x1 = tf.layers.conv2d(layer4_out_scaled, num_classes,
                                           kernel_size=1, strides=(1,1), padding='SAME',
                                           kernel_initializer=tf.truncated_normal_initializer(stddev=STDDEV_INI),
                                           kernel_regularizer=tf.contrib.layers.l2_regularizer(L2_REG),
@@ -112,7 +112,7 @@ def layers(vgg_layer3_out, vgg_layer4_out, vgg_layer7_out, num_classes):
                                                    name='fcn_layer4_up')
     
         # 1x1 convolution of vgg layer 3
-        fcn_layer3_1x1 = tf.layers.conv2d(vgg_layer3_out, num_classes,
+        fcn_layer3_1x1 = tf.layers.conv2d(layer3_out_scaled, num_classes,
                                           kernel_size=1, strides=(1,1), padding='SAME',
                                           kernel_initializer=tf.truncated_normal_initializer(stddev=STDDEV_INI),
                                           kernel_regularizer=tf.contrib.layers.l2_regularizer(L2_REG),
@@ -190,7 +190,9 @@ def train_nn(sess, epochs, batch_size, get_batches_fn, train_op, cross_entropy_l
     #merged_summary_op = tf.summary.merge_all()
     #summary_writer = tf.summary.FileWriter(LOG_PATH, graph=sess.graph)
     
-    run_count = 0
+    sess.run(tf.global_variables_initializer())
+    
+    print("Training begins")
 
     start_time = time.time()
     
@@ -200,35 +202,20 @@ def train_nn(sess, epochs, batch_size, get_batches_fn, train_op, cross_entropy_l
         # Loop over all batches
         for batch_images, batch_labels in get_batches_fn(batch_size):
             
-            #if run_count % 10 == 0 and merged_summary_op != None:
-                
-                # Run optimization op (backprop), cost op (to get loss value)
-                # and summary nodes
-                #_, loss, summary = sess.run([train_op, cross_entropy_loss, merged_summary_op],
-                #                            feed_dict={input_image: batch_images,
-                #                                       correct_label: batch_labels,
-                #                                       keep_prob: KEEP_PROB, 
-                #                                       learning_rate: LEARNING_RATE})
-                #print("RUN ",run_count)
-                #summary_writer.add_summary(summary, run_count)
-                
-            #else:
-                # Run optimization op (backprop) and cost op (to get loss value)
-                #_, loss = sess.run([train_op, cross_entropy_loss],
-                #                   feed_dict={input_image: batch_images,
-                #                              correct_label: batch_labels,
-                #                              keep_prob: KEEP_PROB, 
-                #                              learning_rate: LEARNING_RATE})
             _, loss = sess.run([train_op, cross_entropy_loss],
                                feed_dict={input_image: batch_images,
                                           correct_label: batch_labels,
                                           keep_prob: KEEP_PROB, 
                                           learning_rate: LEARNING_RATE})
-            run_count += 1
 
-        print("Epoch: {}".format(i + 1), "/ {}".format(epochs), 
+        print("Epoch: {}".format(epoch + 1), "/ {}".format(epochs), 
               " Loss: {:.3f}".format(loss),
               " Time: ", str(timedelta(seconds=(time.time() - start_time))))
+
+        vars = 0
+        for v in tf.all_variables():
+            vars += np.prod(v.get_shape().as_list())
+        print(vars)
     
     print("Optimization Finished!")
 tests.test_train_nn(train_nn)
@@ -237,15 +224,10 @@ tests.test_train_nn(train_nn)
 def run():
     num_classes = 2
     image_shape = (160, 576)
-    data_dir = './data'
-    runs_dir = './runs'
-    model_path = LOG_PATH + "/model.ckpt"
-    tests.test_for_kitti_dataset(data_dir)
+    data_dir = '/data'
+    runs_dir = '/output/runs'
 
-    # Make folder for current run
-    if os.path.exists(LOG_PATH):
-        shutil.rmtree(LOG_PATH)
-    os.makedirs(LOG_PATH)
+    tests.test_for_kitti_dataset(data_dir)
 
     # Download pretrained vgg model
     helper.maybe_download_pretrained_vgg(data_dir)
@@ -273,14 +255,7 @@ def run():
         logits, train_op, loss = optimize(last_layer, correct_label, learning_rate, num_classes)
 
         # TODO: Train NN using the train_nn function
-        saver = tf.train.Saver()
-
-        sess.run(tf.global_variables_initializer())
         train_nn(sess, EPOCHS, BATCH_SIZE, get_batches_fn, train_op, loss, input_image, correct_label, keep_prob, learning_rate)
-        
-        # Save model weights to disk
-        save_path = saver.save(sess, model_path)
-        print("Model saved in file: %s" % save_path)
 
         # TODO: Save inference data using helper.save_inference_samples
         helper.save_inference_samples(runs_dir, data_dir, sess, image_shape, logits, keep_prob, input_image)
